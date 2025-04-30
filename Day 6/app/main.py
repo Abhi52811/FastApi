@@ -1,0 +1,92 @@
+from typing import List, Optional
+from fastapi import Depends, FastAPI, Response, status, HTTPException
+from random import randrange
+
+import psycopg
+from psycopg.rows import dict_row
+import time
+
+from sqlalchemy.orm import Session
+from .databases import engine, get_db
+from . import models, schemas
+
+models.Base.metadata.create_all(bind=engine)
+
+app = FastAPI()
+
+while True:
+    try:
+        conn = psycopg.connect(host='localhost',dbname='fastapiDB',user='postgres',password='root',row_factory=dict_row)
+        print(conn)
+        cursor= conn.cursor()
+        print(cursor)
+        print("DB connection was sucessfull")
+        break
+    except Exception as error:
+        print("Connection to DB failed")
+        print("Error:",error)
+        time.sleep(5) 
+
+@app.get("/")
+def root():
+    return {"message": "Hello world"}
+
+@app.get("/posts", response_model=List[schemas.PostResponse])
+def get_posts(db: Session = Depends(get_db)):
+    posts = db.query(models.Post).all()
+    test = db.query(models.Post)
+    print(test)
+    return posts
+
+# Pedantic model converts dictionary into the specific model
+@app.post("/createPosts", status_code=status.HTTP_201_CREATED, response_model=schemas.PostResponse)
+def create_post(post:schemas.PostCreate, db: Session = Depends(get_db)):
+    print(post.dict())
+    for key, value in post.dict().items():
+        print(f"{key}: {value}")
+    new_post = models.Post(**post.dict())
+    # new_post is a sqlachmey model and need to convert it into pedantic model
+    print(type(new_post))
+    db.add(new_post)
+    db.commit()
+    db.refresh(new_post)
+    return new_post
+
+@app.get("/posts/latest", response_model=schemas.PostResponse)
+def last_post(db: Session = Depends(get_db)):
+    post = db.query(models.Post).order_by(models.Post.created_At.desc()).first()
+    return post
+
+@app.get("/posts/{id}", response_model=schemas.PostResponse)
+def get_post_by_id(id: int,db: Session = Depends(get_db)):
+    post = db.query(models.Post).filter(models.Post.id == id).first()
+    if not post:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Post with id: {id} not found.")
+    return post
+
+@app.delete("/posts/{id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_post(id: int,db: Session = Depends(get_db)):
+    post = db.query(models.Post).filter(models.Post.id == id)
+    if post.first() is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Post with {id} not found."
+        )
+    post.delete(synchronize_session=False)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.put("/posts/{id}", response_model=schemas.PostResponse)
+def update_post(id: int,updated_post: schemas.PostCreate, db: Session = Depends(get_db)):
+    post_query = db.query(models.Post).filter(models.Post.id == id)
+    post=post_query.first()
+    print(post)
+    if post is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Post with {id} not found."
+        )
+    post_query.update(updated_post.dict(),synchronize_session=False)
+    db.commit()
+    return post_query.first()
